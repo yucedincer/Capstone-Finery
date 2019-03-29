@@ -1,0 +1,238 @@
+import pandas as pd
+import numpy as np
+import random
+from random import choice, sample, choices
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import linear_kernel
+from sklearn.feature_extraction import text
+from sklearn.metrics.pairwise import cosine_similarity
+import warnings
+warnings.filterwarnings("ignore")
+
+user_subset = pd.read_excel("../data/finerydata.xlsx", sheet_name = "7. user_subset")
+item_subset = pd.read_excel("../data/finerydata.xlsx", sheet_name = "8. item_subset")
+wishlist = pd.read_excel("../data/finerydata.xlsx", sheet_name = "12. wishlist_items")
+influencers = pd.read_excel("../data/finerydata.xlsx", sheet_name = "13. user_influencer")
+users_set_100 = pd.read_excel("../data/finerydata.xlsx", sheet_name = "14. 100_users_set")
+item_set_100 = pd.read_excel("../data/finerydata.xlsx", sheet_name = "15. 100_users_item_set")
+influencers_100 = pd.read_excel("../data/finerydata.xlsx", sheet_name = "16. 100_user_influencer")
+category = pd.read_excel("../data/finerydata.xlsx", sheet_name = "9. category_ids")
+brand_affinity = pd.read_excel("../data/finerydata.xlsx", sheet_name = "10. brands_affinity")
+reference_color = pd.read_excel("../data/finerydata.xlsx", sheet_name = "2. reference_color")
+occasion = pd.read_excel("../data/finerydata.xlsx", sheet_name = "4. sample_occasion")
+color_rule = pd.read_excel("../data/finerydata.xlsx", sheet_name = "5. influencer_color_rules", header = None)
+cat_subcat = pd.read_excel("../data/finerydata.xlsx", sheet_name = "6. category_and_subcategory", header = None)
+
+brand_affinity1 = brand_affinity.iloc[1:,:3]
+brand_affinity1.columns = ['brand_1', 'brand_2', 'score']
+brand_affinity2 = brand_affinity.iloc[1:,4:]
+brand_affinity2.columns = ['brand_1', 'brand_2', 'score']
+brand_aff = brand_affinity1.append(brand_affinity2, ignore_index=True)
+all_user = user_subset.append(users_set_100, ignore_index=True, sort=False)
+all_influencer = influencers.append(influencers_100, ignore_index=True, sort=False)
+
+all_item = item_subset.append(item_set_100, ignore_index=True, sort=False)
+all_item['wishlist'] = 0
+wishlist['wishlist'] = 1
+all_item['product_id'] = all_item['product_id'].fillna(all_item['item_id'])
+wishlist.rename(columns={'userid': 'user_id', 
+                         'itemid': 'product_id', 
+                         'itemname': 'item_name',
+                         'brandname_lower': 'brand_id',
+                         'store_lower': 'store_id',
+                         'itemname_lower': 'item_name_lower', 
+                         'itemcategory': 'product_category_id',
+                         'deleted': 'is_deleted',
+                         'price': 'paid_price', 
+                         'origprice': 'list_price'
+                        }, inplace=True)
+
+item_wishlist = all_item.append(wishlist, ignore_index=True, sort=False)
+category = category.dropna(how='all') 
+cat_subcat = cat_subcat.iloc[:,:1].dropna(how='all')
+cat_subcat_ = cat_subcat[0].str.split(": ", n = 1, expand = True)
+cat_subcat_['category_name'] = cat_subcat_[0]
+cat_subcat_['occasion'] = cat_subcat_[1]
+cat_subcat_ = cat_subcat_[['category_name', 'occasion']]
+all_subcat = 'Beach, Work, School, Errands, Dinner, Concert, Night Life, Cocktail, Brunch, Interview, Movies, Formal'
+cat_subcat_['occasion'].replace([None], all_subcat, inplace=True)
+category = category.replace({'Category Name' : {'T Shirts' : 'T-shirts', 'Knits' : 'Sweaters', 
+                                     'Jeans' : 'Denim', 'Jumpsuits': 'Jumpsuit',
+                                    'Hoodies': 'Sweatshirt', 'Boots & Booties': 'Boots'}})
+nrows = cat_subcat_.shape[0]
+category_sub = category.merge(cat_subcat_[:nrows-11], how = "left", left_on = "Category Name", right_on = 'category_name')
+item_wishlist = item_wishlist.merge(category_sub.drop("category_name", axis = 1), how = "left", left_on = "product_category_id", right_on = 'Category ID')
+col_names = ['user_id', 'style_age_range_group', 'style_vibe', 
+            'style_most_important_active', 'style_most_important_any',
+            'style_most_important_beach', 'style_most_important_dress',
+            'style_most_important_bags', 'style_most_important_jeans',
+            'style_most_important_jump', 'style_most_important_nothing',
+            'style_most_important_outwear', 'style_most_important_pants',
+            'style_most_important_shoes', 'style_most_important_tops',
+            'style_shopping_pref_gaps',
+            'style_shopping_pref_other', 'style_shopping_pref_trips',
+            'style_shopping_pref_events', 'style_shopping_pref_work',
+            'style_shopping_pref_wish', 'style_shopping_pref_organize',
+            'style_shopping_pref_inspo']
+subset_user = all_user[col_names]
+subset_user['style_vibe'] = subset_user['style_vibe'].str.split(",").str[0].str.lower()
+subset_user["style_age_range_group"] = subset_user["style_age_range_group"].apply(lambda x: choices([0, 1, 2], [0.4, 0.3, 0.3])[0] if np.isnan(x) else x)
+subset_user["style_vibe"] = subset_user["style_vibe"].fillna(random.choices(subset_user['style_vibe'].unique())[0])
+
+col_names = subset_user.filter(like='style_shopping').columns
+col_names = col_names.append(subset_user.filter(like='style_most_important').columns)
+subset_user[col_names] = subset_user[col_names].fillna(choices([0,1])[0])
+col_names = ['user_id', 'product_id', 'brand_id', 'parsed_brand_name', 'store_id', 'parsed_store_name', 
+             'is_deleted', 'item_name_lower', 'item_name',
+             'Category ID', 'Category Name', 'occasion', 'paid_price', 'color_parsed', 'wishlist']
+subset_item = item_wishlist[col_names]
+subset_item.rename(columns={'Category Name': 'category_name', 'Category ID': 'category_id'}, inplace = True)
+subset_item['brand_id'] = subset_item['brand_id'].str.replace(' ', '')
+subset_item['brand_id'] = subset_item['brand_id'].str.replace('-', '')
+subset_item['brand_id'] = subset_item['brand_id'].str.replace('&', '')
+subset_item['store_id'] = subset_item['store_id'].str.replace(' ', '')
+subset_item['store_id'] = subset_item['store_id'].str.replace('-', '')
+subset_item['store_id'] = subset_item['store_id'].str.replace('&', '')
+subset_item["has_product"] = [0 if deleted == True else 1 for deleted in subset_item["is_deleted"]]
+user_product = subset_item.groupby(["user_id", "product_id"])[["has_product"]].sum().reset_index()
+user_product.sort_values(by = "has_product", ascending = False).head(10)
+
+influencers = ['weworewhat', 'chiaraferragni', 'blaireadiebee', 'somethingnavy', 'hannahbronfman',
+               'nicolettemason', 'manrepeller', 'jordynwoods', 'seaofshoes', 'ariellecharnas']
+
+user_influencer = pd.DataFrame(data=0, index=all_user.user_id, columns=influencers)
+
+for row in range(all_influencer.shape[0]):
+    user = all_influencer['user_id'][row]
+    influ = all_influencer['style_who_inspiries'][row]
+    for influencer in influencers:
+        if influ.find(influencer) != -1:
+            user_influencer[influencer][user] += 1 
+
+def filter_item(list_items = [], list_brand = [], list_occasion = [], list_category = []):
+    df = subset_item[~subset_item['category_name'].isin(['Beauty', 'Kids'])]
+    if list_items != []:
+        df = df[~df['product_id'].isin(list_items)]
+    if list_brand != []:
+        df = df[df['brand_id'].isin(list_brand)]
+    if list_occasion != []:
+        list_occasion = "|".join(list_occasion)
+        df = df[df['occasion'].str.contains(list_occasion, na = False)]
+    if list_category != []:
+        df = df[df['category_name'].isin(list_category)]
+    return df
+
+def fill_table(df, product_id, n_items):
+    recommendation = pd.DataFrame(data = 0, index = range(n_items), 
+                                  columns = ['Item Name', 'Brand', 'Store', 
+                                             'Category', 'Price', 'Color'])
+    for row, item in enumerate (product_id):
+        try:
+            recommendation['Item Name'][row] = df[df['product_id'] == item]['item_name'].mode()[0]
+        except IndexError:
+            recommendation['Item Name'][row] = 'No Item Name'
+        try:
+            recommendation['Brand'][row] = df[df['product_id'] == item]['parsed_brand_name'].mode()[0]
+        except IndexError:
+            recommendation['Brand'][row] = 'No Brand'
+        try:
+            recommendation['Store'][row] = df[df['product_id'] == item]['parsed_store_name'].mode()[0]
+        except IndexError:
+            recommendation['Store'][row] = 'No Store'
+        try:
+            recommendation['Category'][row] = df[df['product_id'] == item]['category_name'].mode()[0]
+        except IndexError:
+            recommendation['Category'][row] = 'No Category'
+        try:
+            recommendation['Price'][row] = df[df['product_id'] == item]['paid_price'].mean()
+        except IndexError:
+            recommendation['Price'][row] = 'No Price'
+        try:
+            recommendation['Color'][row] = df[df['product_id'] == item]['color_parsed'].mode()[0]
+        except IndexError:
+            recommendation['Color'][row] = 'No Color'
+    return recommendation
+
+def similarity(df):
+    users_ids = df.index
+    similarity = pd.DataFrame(data = cosine_similarity(df), 
+                         index = users_ids, columns = users_ids)
+    return similarity
+
+def most_popular(n_items, list_items = [], list_brand = [], list_occasion = [], list_category = []):
+    item = filter_item(list_items, list_brand, list_occasion, list_category)
+    popular_item = item.groupby(["product_id", "category_name"])[["has_product"]].sum().reset_index()
+    popular_item = popular_item.sort_values(by = "has_product", ascending = False)[:n_items * 5]
+    popular_item = random.sample(popular_item['product_id'].tolist(), n_items)
+    recommendation = fill_table(item, popular_item, n_items)
+    return recommendation
+
+def recommendation_influencer_aff(list_influencer, n_item, list_items = [], list_brand = [], list_occasion = [], list_category = []):
+    influencer = pd.DataFrame(data = 0, columns = influencers, index = ['new user'])
+    for influ in list_influencer:
+        influencer[influ] = 1
+    similarity_user = similarity(user_influencer.append(pd.DataFrame(influencer)))
+    similar_users = similarity_user['new user'].sort_values(ascending = False)[1:]
+    if (similar_users[0] == 0):
+        recommendation = most_popular(n_item, list_items, list_brand, list_occasion, list_category)
+    else:
+        similar_users = similar_users[similar_users > 0.5].index
+        item = filter_item(list_items, list_brand, list_occasion, list_category)
+        similar_subset = item[item['user_id'].isin(similar_users)]
+        similar_subset = similar_subset.groupby(["product_id", "category_name"])[["has_product"]].sum().reset_index()
+        similar_subset = similar_subset[similar_subset['has_product'] > 0].sort_values(by = "has_product", ascending = False)
+        if len(similar_subset) <= n_item:
+            n_item = len(similar_subset)
+            similar_subset = similar_subset['product_id']
+        else:
+            similar_subset = random.sample(similar_subset['product_id'].tolist(), n_item)
+        recommendation = fill_table(item, similar_subset, n_item)
+    return recommendation
+
+def recommend_new_user(list_influencer, n_recommendations, list_brand, list_occasion, list_category):
+    list_items = []
+    if list_influencer == []:
+        return most_popular(n_recommendations, list_items, list_brand, list_occasion, list_category)
+    else:
+        return recommendation_influencer_aff(list_influencer, n_recommendations, list_items, list_brand, list_occasion, list_category)
+
+userBrands = subset_item.groupby(['user_id','brand_id']).count()
+userBrands = userBrands.reset_index().pivot(index='user_id', columns='brand_id', values = 'item_name_lower')
+userBrands.fillna(0, inplace = True)
+brandAffinity = np.ones(len(userBrands.columns)**2).reshape(len(userBrands.columns),len(userBrands.columns))*.05 + np.eye(len(userBrands.columns))
+occasions = ['Beach','Work','School','Errands','Dinner','Formal event','Concert',
+            'Night life','Cocktail parties','Brunch','Interview','Movies','Workout']
+
+
+def recommend_user_exists(user_id, n_item, occasion = [], category = []):
+    uBrandScore = np.matmul(userBrands.loc[[user_id]],brandAffinity)
+    brands = uBrandScore.T.sample(40, replace = True).index.tolist()
+    item = subset_item[subset_item['user_id'] == user_id]['product_id'].unique().tolist()
+    influencer = user_influencer.filter(like = user_id, axis = 0)
+    influencer = [column for column in influencer.columns if influencer.loc[user_id][column] == 1]
+    if influencer == []:
+        item_to_recommend = most_popular(n_item, item, brands, occasion, category)
+    else:
+        item_to_recommend = recommendation_influencer_aff(influencer, n_item, item, brands, occasion, category)
+    return item_to_recommend
+
+## For new user
+n_recommendations = 5
+recommend_new_user(list_influencer, n_recommendations, list_brand, list_occasion, list_category)
+
+## For existing user
+recommend_user_exists(user_id, n_recommendations, list_occasion, list_category)
+
+
+
+
+#### User inputs:
+## For new user
+list_influencer = ['chiaraferragni'] # user input
+list_occasion = [] # user input
+list_category = ['Pants'] # user input
+
+## For existing user
+user_id = subset_item['user_id'].sample(1).values[0] # user input
+list_occasion = ['Work', 'Formal'] # user input
+list_category = ['']
