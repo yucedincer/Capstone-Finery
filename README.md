@@ -1,1 +1,1 @@
-# Capstone-Finery
+# Capstone project for Finery
